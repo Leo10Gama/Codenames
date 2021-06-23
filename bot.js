@@ -1,9 +1,11 @@
 // Run dotenv
 require('dotenv').config();
 
-const BOT_USER_ID = "827329662044733441"; //The user ID of the bot, for use sometimes
+const BOT_USER_ID = "827329662044733441";   // The user ID of the bot, for use sometimes
+const MOD_USERS = ["233017812820557824"];   // List of "moderator" users who can use override commands
 const Discord = require('discord.js');
 const client = new Discord.Client();
+const fs = require('fs');
 
 // ---------- Necessary constants below ----------
 
@@ -45,8 +47,12 @@ const MESSAGES = {
     "turn_operatives": (colour, hint) => `**${colour} operatives**! Your spymaster has given the hint: \`${hint}\`. Guess which words with \`${PREFIX}guess [word]\``,
     "player_selectedcard": (player, card) => `**${player}** selected \`${card.word}\`, which was a **${card.colour}** card!`,
     "gameend_allwordsselected": (colour) => `Congratulations **${colour}** team! You win!! 🎉🎉`,
-    "gameend_assassin": (colour) => `Oh no! Since that was the assassin card, **${colour}** team loses! Better luck next time!`
+    "gameend_assassin": (colour) => `Oh no! Since that was the assassin card, **${colour}** team loses! Better luck next time!`,
 }
+const CARD_PACKS = [
+    "standard",
+    "hades"
+];
 // Turn-related (for remembering whose turn it is)
 const TURN_RED = "Red";
 const TURN_BLUE = "Blue";
@@ -121,6 +127,7 @@ client.on('message', async msg => {
          */
         if (msg.content == "ping") {
             msg.channel.send("pong!");
+            console.log(msg.author.id);
         }
 
         /**
@@ -237,11 +244,72 @@ function startGame(collected) {
     // Decide who's turn it is
     t = Math.random() * 2 > 1 ? TURN_RED : TURN_BLUE;
     // Get the wordbank for the game 
-    // TODO: Generate 25 Card objects; 9 for the colour whose turn it is, 8 for the other, 1 assassin (black), rest neutral (white)
+    var default_deck = ["standard"];
+    c = getCards(default_deck, t == TURN_RED ? 9 : 8, t == TURN_BLUE ? 9 : 8);
     // Create and return the actual Game object
     var myGame = new Game(collected.first().guild, true, t, rm, bm, ros, bos, c);
     ACTIVE_GAMES.push(myGame);
     return myGame;
+}
+
+/**
+ * Function to generate 25 card objects from a list of available word banks
+ * @pre `r` and `b` together sum to a number < 24
+ * @param {String[]} cardPacks An array of strings that directly reference a list of
+ *      available card packs to draw from
+ * @param {int} r The number of red cards to put in the array
+ * @param {int} b The number of blue cards to put in the array
+ * @return {Card[]} An array of 25 cards whose words have been randomly selected from
+ *      those in cardPacks, with `r` red cards, `b` blue cards, and one assasin card
+ */
+function getCards(cardPacks, r, b) {
+    // Put all available words in an array
+    var words = [];
+    for (const pack of cardPacks) {
+        var newWords = fs.readFileSync(`Word Packs/${pack}.txt`, {encoding:'utf8'}).split('\n')
+        words = words.concat(newWords);
+    }
+    // Make sure formatting is correct
+    for (var word of words) {
+        if (word[word.length - 1] == '\r') {
+            words[words.indexOf(word)] = (word.substr(0, word.length - 1));
+        }
+    }
+    // Remove duplicates
+    words = words.filter((word, index) => words.indexOf(word) === index);
+    // Pick out 25 words to play with
+    var cardWords = [];
+    for (var i = 0; i < 25; i++) {
+        var randIndex = Math.floor(Math.random() * (words.length - 1));
+        cardWords.push(words[randIndex]);
+        words.splice(randIndex, 1);
+    }
+    // Randomly assign colours as inserting to card array
+    cardArray = []
+    // Red words
+    for (var i = 0; i < r; i++) {
+        var randIndex = Math.floor(Math.random() * (cardWords.length - 1));
+        cardArray.push(new Card(CARD_RED, cardWords[randIndex], false));
+        cardWords.splice(randIndex, 1);
+    }
+    // Blue words
+    for (var i = 0; i < b; i++) {
+        var randIndex = Math.floor(Math.random() * (cardWords.length - 1));
+        cardArray.push(new Card(CARD_BLUE, cardWords[randIndex], false));
+        cardWords.splice(randIndex, 1);
+    }
+    // Assasin card
+    var randIndex = Math.floor(Math.random() * (cardWords.length - 1));
+    cardArray.push(new Card(CARD_ASSASSIN, cardWords[randIndex], false));
+    cardWords.splice(randIndex, 1);
+    // Remainder of cards
+    for (var word of cardWords) {
+        cardArray.push(new Card(CARD_NEUTRAL, word, false));
+    }
+    // Shuffle the values
+    cardArray = cardArray.sort(() => Math.random() - 0.5);
+    // Return the final card array
+    return cardArray;
 }
 
 client.login(process.env.DISCORD_TOKEN);

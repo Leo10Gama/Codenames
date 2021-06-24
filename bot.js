@@ -13,6 +13,7 @@ const fs = require('fs');
 const PREFIX = "cn.";
 // Games currently active
 var ACTIVE_GAMES = [];
+var SELECTED_PACKS = ["standard"];
 // Emojis
 const RED_SPYMASTER_EMOJI = '🔴';
 const BLUE_SPYMASTER_EMOJI = '🔵';
@@ -39,7 +40,8 @@ const ERROR_MESSAGES = {
     "multiple_roles": "**ERROR**: One or more players have chosen multiple roles, cancelling game...",
     "invalid_hint": "**ERROR**: Invalid hint. Please keep your hint in the format `[word] [num]`, where `[word]` is one word (not on the board) and `[num]` is either an integer number or `inf`!",
     "invalid_guess": "**ERROR**: That word is not on the board! Please try again.",
-    "card_alreadyflipped": "**ERROR**: That card has already been flipped over!"
+    "card_alreadyflipped": "**ERROR**: That card has already been flipped over!",
+    "pack_doesntexist": (pack) => `**ERROR**: Card pack \`${pack}\` does not exist. Use \`${PREFIX}pack\` to see all available card packs!`
 };
 const MESSAGES = {
     "turn_master_private": `It's your team's turn! Send me a direct message here with your hint, in the format \n\`${PREFIX}hint [word] [num]\`\n(or use \`inf\` as \`[num]\` for infinity)`,
@@ -48,10 +50,13 @@ const MESSAGES = {
     "player_selectedcard": (player, card) => `**${player}** selected \`${card.word}\`, which was a **${card.colour}** card!`,
     "gameend_allwordsselected": (colour) => `Congratulations **${colour}** team! You win!! 🎉🎉`,
     "gameend_assassin": (colour) => `Oh no! Since that was the assassin card, **${colour}** team loses! Better luck next time!`,
+    "pack_removed": (pack) => `Card pack \`${pack}\` removed from selection.`,
+    "pack_added": (pack) => `Card pack \`${pack}\` added to selection.`
 }
 const CARD_PACKS = [
     "standard",
-    "hades"
+    "hades",
+    "countries"
 ];
 // Turn-related (for remembering whose turn it is)
 const TURN_RED = "Red";
@@ -120,12 +125,13 @@ client.on('message', async msg => {
     // Detect prefix
     if (msg.content.substr(0, 3) == PREFIX) {
         msg.content = msg.content.substr(3);    // trim message
+        var commands = msg.content.split(" ");  // parse message into subcommands
 
         /**
          * PING METHOD: mostly for debug
          * @return pong
          */
-        if (msg.content == "ping") {
+        if (commands[0] == "ping") {
             msg.channel.send("pong!");
             console.log(msg.author.id);
         }
@@ -133,18 +139,19 @@ client.on('message', async msg => {
         /**
          * RULES: Displays the general rules for codenames
          */
-        if (msg.content == "rules") {
+        if (commands[0] == "rules") {
             // TODO: Make the rules command lol
         }
 
         /**
-         * BEGIN PROMPT: This method will create an embed, which is listened to.
+         * START PROMPT: This method will create an embed, which is listened to.
          * The reactions on the embed will indicate which role each player has
          * taken, among the 4 available roles.
          */
-        if (msg.content == "start") {
+        if (commands[0] == "start") {
             // Create embed
-            msg.channel.send(START_PROMPT_EMBED)
+            console.log(SELECTED_PACKS);
+            msg.channel.send(START_PROMPT_EMBED.addField("Currently selected packs", SELECTED_PACKS.join("\n")))
                 .then(prompt => {
                     // React on embed with options
                     prompt.react(RED_SPYMASTER_EMOJI)
@@ -186,6 +193,33 @@ client.on('message', async msg => {
                 .catch(err => msg.channel.send(err));
         }
 
+        /**
+         * PACK COMMAND: This method is used to either list or toggle available card
+         * packs for the next game. It only allows packs available in CARD_PACKS, which
+         * lists packs in the "Word Packs" folder.
+         */
+        if (commands[0] == "packs") {
+            if (commands[1] == "toggle" || CARD_PACKS.includes(commands[1])) {          // Switch an active pack to off (or on)
+                var packToToggle = commands[1] == "toggle" ? commands[2] : commands[1]
+                if (CARD_PACKS.includes(packToToggle)) {
+                    if (SELECTED_PACKS.includes(packToToggle)) {
+                        SELECTED_PACKS.splice(SELECTED_PACKS.indexOf(packToToggle), 1);
+                        msg.channel.send(MESSAGES["pack_removed"](packToToggle));
+                    } else {
+                        SELECTED_PACKS.push(packToToggle);
+                        msg.channel.send(MESSAGES["pack_added"](packToToggle));
+                    }
+                } else {
+                    msg.channel.send(ERROR_MESSAGES["pack_doesntexist"](packToToggle));
+                }
+            } else {                            // List all active packs
+                var myMessage = "Currently active packs:\n\`\`\`\n";
+                if (SELECTED_PACKS.length == 0) myMessage += "[no packs currently selected]";
+                else myMessage += SELECTED_PACKS.join("\n");
+                myMessage += "\`\`\`";
+                msg.channel.send(myMessage);
+            }
+        }
     }
 });
 
@@ -244,8 +278,8 @@ function startGame(collected) {
     // Decide who's turn it is
     t = Math.random() * 2 > 1 ? TURN_RED : TURN_BLUE;
     // Get the wordbank for the game 
-    var default_deck = ["standard"];
-    c = getCards(default_deck, t == TURN_RED ? 9 : 8, t == TURN_BLUE ? 9 : 8);
+    if (SELECTED_PACKS.length == 0) SELECTED_PACKS.push("standard");
+    c = getCards(SELECTED_PACKS, t == TURN_RED ? 9 : 8, t == TURN_BLUE ? 9 : 8);
     // Create and return the actual Game object
     var myGame = new Game(collected.first().guild, true, t, rm, bm, ros, bos, c);
     ACTIVE_GAMES.push(myGame);

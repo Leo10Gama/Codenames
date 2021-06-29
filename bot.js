@@ -21,7 +21,7 @@ const RED_OPERATIVE_EMOJI = '🅾️';
 const BLUE_OPERATIVE_EMOJI = '0️⃣';
 const START_GAME_EMOJI = '✅';
 // Prompts and Embeds
-const START_PROMPT_EMBED = new Discord.MessageEmbed()
+var START_PROMPT_EMBED = new Discord.MessageEmbed()
     .setTitle("Codenames")
     .setColor('#E0D12B')
     .setDescription(`Codenames is a game in which two spymasters help their team of operatives to figure out which clues are theirs! 
@@ -151,7 +151,7 @@ client.on('message', async msg => {
         if (commands[0] == "start") {
             // Create embed
             console.log(SELECTED_PACKS);
-            msg.channel.send(START_PROMPT_EMBED.addField("Currently selected packs", SELECTED_PACKS.join("\n")))
+            msg.channel.send(START_PROMPT_EMBED.fields.length >= 2 ? START_PROMPT_EMBED.spliceFields(1, 1, {name: "Currently selected packs", value: SELECTED_PACKS.join("\n")}) : START_PROMPT_EMBED.addField("Currently selected packs", SELECTED_PACKS.join("\n")))
                 .then(prompt => {
                     // React on embed with options
                     prompt.react(RED_SPYMASTER_EMOJI)
@@ -179,7 +179,7 @@ client.on('message', async msg => {
                             try {
                                 var myGame = startGame(collected);
                                 // Send the board and indicate whose turn it is
-                                // TODO: some sort of printBoard() function
+                                prompt.channel.send(printBoard(myGame.cards));
                                 // Ping spymaster and send necessary messages
                                 myGame.turn == TURN_RED ? myGame.redMaster.send(MESSAGES["turn_master_private"]) : myGame.blueMaster.send(MESSAGES["turn_master_private"]);
                                 prompt.channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED ? myGame.redMaster.username : myGame.blueMaster.username));
@@ -344,6 +344,62 @@ function getCards(cardPacks, r, b) {
     cardArray = cardArray.sort(() => Math.random() - 0.5);
     // Return the final card array
     return cardArray;
+}
+
+/**
+ * Create a string to represent a display of all card objects in a game
+ * @pre The `cards` param is of size exactly 25
+ * @param {Card[]} cards The array of cards currently in play
+ * @return {String} A string (encased in ``` symbols) to be sent as a Discord message
+ */
+function printBoard(cards) {
+    // Set up constants to use for printing
+    const BOARD_ROWS = 5;
+    const BOARD_COLS = 5;
+    const MAX_WORD_SIZE = 12;
+    const VERT_DIVIDE_CHAR = "-";
+    const HORI_DIVIDE_CHAR = "|";
+    const BLUE_FILL_CHAR = "🟦";
+    const RED_FILL_CHAR = "🟥";
+    const WHITE_FILL_CHAR = "⬜";
+    const BLACK_FILL_CHAR = "⬛";
+    const VERTICAL_DIVIDER = VERT_DIVIDE_CHAR.repeat(13).repeat(5) + VERT_DIVIDE_CHAR;
+    const HORIZONTAL_DIVIDER_COLOUR = (colour) => HORI_DIVIDE_CHAR + " " + (colour == CARD_BLUE ? BLUE_FILL_CHAR : colour == CARD_RED ? RED_FILL_CHAR : colour == CARD_ASSASSIN ? BLACK_FILL_CHAR : WHITE_FILL_CHAR).repeat(4) + " ";
+    const HORIZONTAL_DIVIDER_EMPTY = HORI_DIVIDE_CHAR + " ".repeat(12);
+    const HORIZONTAL_DIVIDER_WORD = (word) => HORI_DIVIDE_CHAR + word;
+    // Create first instance of string
+    var result = "```\n";
+    for (var y = 0; y < BOARD_ROWS; y++) {
+        // Make divider
+        result += VERTICAL_DIVIDER + "\n";
+        // Collect the row of 5 cards to format after loop
+        var row = [];
+        for (var x = 0; x < BOARD_COLS; x++) {
+            row[x] = cards[(y * BOARD_ROWS) + x];
+        }
+        // Row of colours
+        for (var card of row) {
+            if (card.flipped) {
+                result += HORIZONTAL_DIVIDER_COLOUR(card.colour);
+            } else {
+                result += HORIZONTAL_DIVIDER_EMPTY;
+            }
+        }
+        result += HORI_DIVIDE_CHAR + "\n";
+        // Row of words
+        for (var card of row) {
+            word = card.word;
+            while (word.length < MAX_WORD_SIZE) {
+                if (word.length % 2 == 1) word = " " + word;
+                else word += " ";
+            }
+            result += HORIZONTAL_DIVIDER_WORD(word);
+        }
+        result += HORI_DIVIDE_CHAR + "\n";
+    }
+    // Cap off text and send it off
+    result += VERTICAL_DIVIDER + "```";
+    return result;
 }
 
 client.login(process.env.DISCORD_TOKEN);

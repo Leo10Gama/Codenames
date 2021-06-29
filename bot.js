@@ -51,7 +51,8 @@ const MESSAGES = {
     "gameend_allwordsselected": (colour) => `Congratulations **${colour}** team! You win!! 🎉🎉`,
     "gameend_assassin": (colour) => `Oh no! Since that was the assassin card, **${colour}** team loses! Better luck next time!`,
     "pack_removed": (pack) => `Card pack \`${pack}\` removed from selection.`,
-    "pack_added": (pack) => `Card pack \`${pack}\` added to selection.`
+    "pack_added": (pack) => `Card pack \`${pack}\` added to selection.`,
+    "master_board": (cards) => `Spymaster board: ${printBoard(cards, true)}`
 }
 const CARD_PACKS = [
     "standard",
@@ -181,6 +182,8 @@ client.on('message', async msg => {
                                 // Send the board and indicate whose turn it is
                                 prompt.channel.send(printBoard(myGame.cards));
                                 // Ping spymaster and send necessary messages
+                                myGame.redMaster.send(MESSAGES["master_board"](myGame.cards));
+                                myGame.blueMaster.send(MESSAGES["master_board"](myGame.cards));
                                 myGame.turn == TURN_RED ? myGame.redMaster.send(MESSAGES["turn_master_private"]) : myGame.blueMaster.send(MESSAGES["turn_master_private"]);
                                 prompt.channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED ? myGame.redMaster.username : myGame.blueMaster.username));
                             } catch (err) {
@@ -350,9 +353,10 @@ function getCards(cardPacks, r, b) {
  * Create a string to represent a display of all card objects in a game
  * @pre The `cards` param is of size exactly 25
  * @param {Card[]} cards The array of cards currently in play
+ * @param {boolean} showAll Whether or not to flip all the cards
  * @return {String} A string (encased in ``` symbols) to be sent as a Discord message
  */
-function printBoard(cards) {
+function printBoard(cards, showAll = false) {
     // Set up constants to use for printing
     const BOARD_ROWS = 5;
     const BOARD_COLS = 5;
@@ -379,7 +383,7 @@ function printBoard(cards) {
         }
         // Row of colours
         for (var card of row) {
-            if (card.flipped) {
+            if (card.flipped || showAll) {
                 result += HORIZONTAL_DIVIDER_COLOUR(card.colour);
             } else {
                 result += HORIZONTAL_DIVIDER_EMPTY;

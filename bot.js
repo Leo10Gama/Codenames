@@ -41,12 +41,15 @@ const ERROR_MESSAGES = {
     "invalid_hint": "**ERROR**: Invalid hint. Please keep your hint in the format `[word] [num]`, where `[word]` is one word (not on the board) and `[num]` is either an integer number or `inf`!",
     "invalid_guess": "**ERROR**: That word is not on the board! Please try again.",
     "card_alreadyflipped": "**ERROR**: That card has already been flipped over!",
-    "pack_doesntexist": (pack) => `**ERROR**: Card pack \`${pack}\` does not exist. Use \`${PREFIX}pack\` to see all available card packs!`
+    "pack_doesntexist": (pack) => `**ERROR**: Card pack \`${pack}\` does not exist. Use \`${PREFIX}pack\` to see all available card packs!`,
+    "hint_missing_params": `**ERROR**: Some parameters are missing or malformed. Please use the form \`${PREFIX}hint [word] [number/"inf"]\``,
+    "not_inagame": "**ERROR**: You are not participating in a game \:(",
+    "not_your_turn": "**ERROR**: It's not your team's turn! Please be patient!!"
 };
 const MESSAGES = {
     "turn_master_private": `It's your team's turn! Send me a direct message here with your hint, in the format \n\`${PREFIX}hint [word] [num]\`\n(or use \`inf\` as \`[num]\` for infinity)`,
     "turn_master_public": (colour, master) => `**${colour} team**'s turn! **${master}** is thinking of a hint...`,
-    "turn_operatives": (colour, hint) => `**${colour} operatives**! Your spymaster has given the hint: \`${hint}\`. Guess which words with \`${PREFIX}guess [word]\``,
+    "turn_operatives": (colour, hint, number) => `**${colour} operatives**! Your spymaster has given the hint: \n\`${hint} ${number}\`\nGuess words with \`${PREFIX}guess [word]\``,
     "player_selectedcard": (player, card) => `**${player}** selected \`${card.word}\`, which was a **${card.colour}** card!`,
     "gameend_allwordsselected": (colour) => `Congratulations **${colour}** team! You win!! 🎉🎉`,
     "gameend_assassin": (colour) => `Oh no! Since that was the assassin card, **${colour}** team loses! Better luck next time!`,
@@ -60,8 +63,10 @@ const CARD_PACKS = [
     "countries"
 ];
 // Turn-related (for remembering whose turn it is)
-const TURN_RED = "Red";
-const TURN_BLUE = "Blue";
+const TURN_RED_MASTER = "Red";
+const TURN_RED_OPERATIVES = "red";
+const TURN_BLUE_MASTER = "Blue";
+const TURN_BLUE_OPERATIVES = "blue";
 // Card Colours
 const CARD_RED = "red";
 const CARD_BLUE = "blue";
@@ -94,16 +99,18 @@ function Card(colour, word, flipped) {
 /**
  * The constructor function for Game objects
  * @param {Guild} guild The guild (server) in which the game is taking place
+ * @param {Channel} active_channel The channel in which the game is taking place
  * @param {boolean} active Whether or not the game is currently active
- * @param {String} turn Which player's turn it is (one of TURN_RED or TURN_BLUE)
+ * @param {String} turn Which player's turn it is (one of TURN_RED_[MASTER/OPERATIVES] or TURN_BLUE_[MASTER/OPERATIVES])
  * @param {User} redMaster The User whose role in game is the red spymaster
  * @param {User} blueMaster The User whose role in game is the blue spymaster
  * @param {User[]} redOps A collection of Users whose roles are red operatives
  * @param {User[]} blueOps A collection of Users whose roles are blue operatives
  * @param {Card[]} cards The set of Card objects being used in the game
  */
-function Game(guild, active, turn, redMaster, blueMaster, redOps, blueOps, cards) {
+function Game(guild, active_channel, active, turn, redMaster, blueMaster, redOps, blueOps, cards) {
     this.guild = guild;
+    this.active_channel = active_channel;
     this.active = active;
     this.turn = turn;
     this.redMaster = redMaster;
@@ -184,8 +191,8 @@ client.on('message', async msg => {
                                 // Ping spymaster and send necessary messages
                                 myGame.redMaster.send(MESSAGES["master_board"](myGame.cards));
                                 myGame.blueMaster.send(MESSAGES["master_board"](myGame.cards));
-                                myGame.turn == TURN_RED ? myGame.redMaster.send(MESSAGES["turn_master_private"]) : myGame.blueMaster.send(MESSAGES["turn_master_private"]);
-                                prompt.channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED ? myGame.redMaster.username : myGame.blueMaster.username));
+                                myGame.turn == TURN_RED_MASTER ? myGame.redMaster.send(MESSAGES["turn_master_private"]) : myGame.blueMaster.send(MESSAGES["turn_master_private"]);
+                                prompt.channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED_MASTER ? myGame.redMaster.username : myGame.blueMaster.username));
                             } catch (err) {
                                 console.log(err);
                                 msg.channel.send(err);
@@ -194,6 +201,36 @@ client.on('message', async msg => {
                     })
                 })
                 .catch(err => msg.channel.send(err));
+        }
+
+        /**
+         * HINT PROMPT: This method listens to a private message and, if the hint
+         * given is valid, sends it to the channel in which the game is taking
+         * place.
+         */
+        if (commands[0] == "hint") {
+            // Get the proper game
+            var myGame = null;
+            for (const g of ACTIVE_GAMES) {
+                if (g.redMaster == msg.author || g.blueMaster == msg.author) myGame = g;
+            }
+            ACTIVE_GAMES.slice(ACTIVE_GAMES.indexOf(myGame), 1);
+            // Not in a game
+            if (myGame == null) msg.channel.send(ERROR_MESSAGES["not_inagame"]);
+            else {
+                // Malformed command
+                if (commands.length != 3) msg.channel.send(ERROR_MESSAGES["hint_missing_params"]);
+                // Command is good
+                else if (myGame.cards.every((c) => c.word != commands[1]) && (!isNaN(commands[2]) || commands[2] == "inf")) {
+                    // Check if it's the correct turn
+                    if ((msg.author == myGame.redMaster && myGame.turn != TURN_RED_MASTER) && (msg.author == myGame.blueMaster && myGame.turn != TURN_BLUE_MASTER)) msg.channel.send(ERROR_MESSAGES["not_your_turn"]);
+                    else {
+                        myGame.active_channel.send(MESSAGES["turn_operatives"](myGame.turn, commands[1].toUpperCase(), commands[2]));
+                        myGame.turn = myGame.turn == TURN_RED_MASTER ? TURN_RED_OPERATIVES : TURN_BLUE_OPERATIVES;
+                        ACTIVE_GAMES.push(myGame);
+                    }
+                } else msg.channel.send(ERROR_MESSAGES["hint_missing_params"]); // params entered wrong or weird
+            }
         }
 
         /**
@@ -228,7 +265,7 @@ client.on('message', async msg => {
 
 /**
  * Function to create a Game object from a ReactionCollector's return parameter
- * @param {Collection<NessageReaction>} collected A collection of the reactions on the 
+ * @param {Collection<MessageReaction>} collected A collection of the reactions on the 
  *      "start game" prompt, which should contain all the necessary variables to start 
  *      the game
  * @return {Game} The newly created Game object, which will have been added to the 
@@ -279,12 +316,12 @@ function startGame(collected) {
     */
 
     // Decide who's turn it is
-    t = Math.random() * 2 > 1 ? TURN_RED : TURN_BLUE;
+    t = Math.random() * 2 > 1 ? TURN_RED_MASTER : TURN_BLUE_MASTER;
     // Get the wordbank for the game 
     if (SELECTED_PACKS.length == 0) SELECTED_PACKS.push("standard");
-    c = getCards(SELECTED_PACKS, t == TURN_RED ? 9 : 8, t == TURN_BLUE ? 9 : 8);
+    c = getCards(SELECTED_PACKS, t == TURN_RED_MASTER ? 9 : 8, t == TURN_BLUE_MASTER ? 9 : 8);
     // Create and return the actual Game object
-    var myGame = new Game(collected.first().guild, true, t, rm, bm, ros, bos, c);
+    var myGame = new Game(collected.first().guild, collected.first().message.channel, true, t, rm, bm, ros, bos, c);
     ACTIVE_GAMES.push(myGame);
     return myGame;
 }

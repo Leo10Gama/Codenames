@@ -38,24 +38,26 @@ const ERROR_MESSAGES = {
     "not_enough_reactions": "**ERROR**: One or more roles have not been taken, cancelling game...",
     "timeout": "**ERROR**: Took too long to start game, ping again if you're still interested.",
     "multiple_roles": "**ERROR**: One or more players have chosen multiple roles, cancelling game...",
-    "invalid_hint": "**ERROR**: Invalid hint. Please keep your hint in the format `[word] [num]`, where `[word]` is one word (not on the board) and `[num]` is either an integer number or `inf`!",
-    "invalid_guess": "**ERROR**: That word is not on the board! Please try again.",
     "card_alreadyflipped": "**ERROR**: That card has already been flipped over!",
-    "pack_doesntexist": (pack) => `**ERROR**: Card pack \`${pack}\` does not exist. Use \`${PREFIX}pack\` to see all available card packs!`,
+    "pack_doesntexist": (pack) => `**ERROR**: Card pack \`${pack}\` does not exist. Use \`${PREFIX}packs\` to see all available card packs!`,
     "hint_missing_params": `**ERROR**: Some parameters are missing or malformed. Please use the form \`${PREFIX}hint [word] [number/"inf"]\``,
+    "guess_missing_params": `**ERROR**: Some parameters are missing or malformed. Please use the form \`${PREFIX}guess [word]\``,
+    "guess_notonboard": (word) => `**ERROR**: The word you guessed \`${word}\` is not on the board. Please guess words that are on the board`,
     "not_inagame": "**ERROR**: You are not participating in a game \:(",
     "not_your_turn": "**ERROR**: It's not your team's turn! Please be patient!!"
 };
 const MESSAGES = {
-    "turn_master_private": `It's your team's turn! Send me a direct message here with your hint, in the format \n\`${PREFIX}hint [word] [num]\`\n(or use \`inf\` as \`[num]\` for infinity)`,
+    "turn_master_private": (cards) => `${printBoard(cards, true, true)} It's your team's turn! Send me a direct message here with your hint, in the format \n\`${PREFIX}hint [word] [num]\`\n(or use \`inf\` as \`[num]\` for infinity)`,
     "turn_master_public": (colour, master) => `**${colour} team**'s turn! **${master}** is thinking of a hint...`,
+    "master_hint_sent": (hint, number) => `Successfully sent the hint \`${hint} ${number}\``,
     "turn_operatives": (colour, hint, number) => `**${colour} operatives**! Your spymaster has given the hint: \n\`${hint} ${number}\`\nGuess words with \`${PREFIX}guess [word]\``,
     "player_selectedcard": (player, card) => `**${player}** selected \`${card.word}\`, which was a **${card.colour}** card!`,
-    "gameend_allwordsselected": (colour) => `Congratulations **${colour}** team! You win!! 🎉🎉`,
-    "gameend_assassin": (colour) => `Oh no! Since that was the assassin card, **${colour}** team loses! Better luck next time!`,
+    "gameend_allwordsselected": (winningColour) => `Congratulations **${winningColour}** team! You win!! 🎉🎉`,
+    "gameend_assassin": (losingColour) => `Oh no! Since that was the assassin card, **${losingColour}** team loses! Better luck next time!`,
     "pack_removed": (pack) => `Card pack \`${pack}\` removed from selection.`,
     "pack_added": (pack) => `Card pack \`${pack}\` added to selection.`,
-    "master_board": (cards) => `Spymaster board: ${printBoard(cards, true)}`
+    "master_board": (cards, colour) => `${printBoard(cards, true, true)} Don't forget! You are team **${colour}**`,
+    "gameend_terminated": `Game ended. GG everyone!`
 }
 const CARD_PACKS = [
     "standard",
@@ -86,14 +88,6 @@ function Card(colour, word, flipped) {
     this.colour = colour;
     this.word = word;
     this.flipped = flipped;
-    /**
-     * Flip over a card if it hasn't yet been flipped
-     * @return {boolean} True if the card has been flipped over successfully
-     */
-    this.flip = () => {
-        if (!this.flipped) this.flipped = true;
-        return this.flipped;
-    }
 }
 
 /**
@@ -133,6 +127,7 @@ client.on('message', async msg => {
     // Detect prefix
     if (msg.content.substr(0, 3) == PREFIX) {
         msg.content = msg.content.substr(3);    // trim message
+        msg.content.toLowerCase();              // make everything smol so it's easier to deal with
         var commands = msg.content.split(" ");  // parse message into subcommands
 
         /**
@@ -189,9 +184,8 @@ client.on('message', async msg => {
                                 // Send the board and indicate whose turn it is
                                 prompt.channel.send(printBoard(myGame.cards));
                                 // Ping spymaster and send necessary messages
-                                myGame.redMaster.send(MESSAGES["master_board"](myGame.cards));
-                                myGame.blueMaster.send(MESSAGES["master_board"](myGame.cards));
-                                myGame.turn == TURN_RED_MASTER ? myGame.redMaster.send(MESSAGES["turn_master_private"]) : myGame.blueMaster.send(MESSAGES["turn_master_private"]);
+                                myGame.turn == TURN_RED_MASTER ? myGame.blueMaster.send(MESSAGES["master_board"](myGame.cards, TURN_BLUE_MASTER)) : myGame.redMaster.send(MESSAGES["master_board"](myGame.cards, TURN_RED_MASTER));
+                                myGame.turn == TURN_RED_MASTER ? myGame.redMaster.send(MESSAGES["turn_master_private"](myGame.cards)) : myGame.blueMaster.send(MESSAGES["turn_master_private"](myGame.cards));
                                 prompt.channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED_MASTER ? myGame.redMaster.username : myGame.blueMaster.username));
                             } catch (err) {
                                 console.log(err);
@@ -201,6 +195,20 @@ client.on('message', async msg => {
                     })
                 })
                 .catch(err => msg.channel.send(err));
+        }
+
+        /**
+         * END PROMPT: If a game is ongoing in the channel, end it
+         */
+        if (commands[0] == "end") {
+            // Get game
+            var myGame = null;
+            for (const g of ACTIVE_GAMES) {
+                if (g.active_channel == msg.channel) myGame = g;
+            }
+            myGame.active = false;
+            myGame.active_channel.send(MESSAGES["gameend_terminated"]);
+            flushGames();
         }
 
         /**
@@ -214,22 +222,104 @@ client.on('message', async msg => {
             for (const g of ACTIVE_GAMES) {
                 if (g.redMaster == msg.author || g.blueMaster == msg.author) myGame = g;
             }
-            ACTIVE_GAMES.slice(ACTIVE_GAMES.indexOf(myGame), 1);
             // Not in a game
             if (myGame == null) msg.channel.send(ERROR_MESSAGES["not_inagame"]);
             else {
                 // Malformed command
                 if (commands.length != 3) msg.channel.send(ERROR_MESSAGES["hint_missing_params"]);
                 // Command is good
-                else if (myGame.cards.every((c) => c.word != commands[1]) && (!isNaN(commands[2]) || commands[2] == "inf")) {
+                else if (myGame.cards.every((c) => c.word != commands[1].toUpperCase()) && (!isNaN(commands[2]) || commands[2] == "inf")) {
                     // Check if it's the correct turn
-                    if ((msg.author == myGame.redMaster && myGame.turn != TURN_RED_MASTER) && (msg.author == myGame.blueMaster && myGame.turn != TURN_BLUE_MASTER)) msg.channel.send(ERROR_MESSAGES["not_your_turn"]);
+                    if ((msg.author == myGame.redMaster && myGame.turn != TURN_RED_MASTER) || (msg.author == myGame.blueMaster && myGame.turn != TURN_BLUE_MASTER)) msg.channel.send(ERROR_MESSAGES["not_your_turn"]);
                     else {
                         myGame.active_channel.send(MESSAGES["turn_operatives"](myGame.turn, commands[1].toUpperCase(), commands[2]));
+                        myGame.turn == TURN_RED_MASTER ? myGame.redMaster.send(MESSAGES["master_hint_sent"](commands[1].toUpperCase(), commands[2])) : myGame.blueMaster.send(MESSAGES["master_hint_sent"](commands[1].toUpperCase(), commands[2]));
                         myGame.turn = myGame.turn == TURN_RED_MASTER ? TURN_RED_OPERATIVES : TURN_BLUE_OPERATIVES;
-                        ACTIVE_GAMES.push(myGame);
                     }
                 } else msg.channel.send(ERROR_MESSAGES["hint_missing_params"]); // params entered wrong or weird
+            }
+        }
+
+        /**
+         * GUESS PROMPT: This method is used by the operatives to guess words after their
+         * spymaster has given them a hint
+         */
+        if (commands[0] == "guess") {
+            // Verify command is formed right
+            if (commands.length >= 2) {
+                // Get the game
+                var myGame = null;
+                for (const g of ACTIVE_GAMES) {
+                    if (g.redOps.includes(msg.author) || g.blueOps.includes(msg.author)) myGame = g;
+                }
+                // Not in a game
+                if (myGame == null) msg.channel.send(ERROR_MESSAGES["not_inagame"]);
+                else {
+                    var endGame = false;
+                    // Verify it's the proper turn
+                    var myGuess = "";
+                    for (var i = 1; i < commands.length; i++) {
+                        myGuess += commands[i] + " ";
+                    }
+                    myGuess = myGuess.trim().toUpperCase();
+                    if ((myGame.turn == TURN_RED_OPERATIVES && myGame.redOps.includes(msg.author)) || (myGame.turn == TURN_BLUE_OPERATIVES && myGame.blueOps.includes(msg.author))) {
+                        // Verify the word is on the board
+                        if (myGame.cards.some((c) => c.word == myGuess && !c.flipped)) {
+                            // Flip the card over (card <- the card that was just flipped)
+                            var card = flipCard(myGame.cards, myGuess);
+                            myGame.active_channel.send(MESSAGES["player_selectedcard"](msg.author, card));
+                            myGame.active_channel.send(printBoard(myGame.cards, false));
+                            // Word doesn't belong to that team, change turns and send necessary messages
+                            if ((myGame.turn == TURN_RED_OPERATIVES && card.colour != CARD_RED) || (myGame.turn == TURN_BLUE_OPERATIVES && card.colour != CARD_BLUE)) {
+                                myGame.turn = myGame.turn == TURN_RED_OPERATIVES ? TURN_BLUE_MASTER : TURN_RED_MASTER;
+                                // Card is the assassin card, end the game
+                                if (card.colour == CARD_ASSASSIN) {
+                                    myGame.active_channel.send(MESSAGES["gameend_assassin"](myGame.turn == TURN_BLUE_MASTER ? TURN_RED_MASTER : TURN_BLUE_MASTER));
+                                    myGame.active_channel.send(MESSAGES["gameend_allwordsselected"](myGame.turn));
+                                    endGame = true;
+                                } else {
+                                    myGame.active_channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED_MASTER ? myGame.redMaster : myGame.blueMaster));
+                                    myGame.turn == TURN_RED_MASTER ? myGame.redMaster.send(MESSAGES["turn_master_private"](myGame.cards)) : myGame.blueMaster.send(MESSAGES["turn_master_private"](myGame.cards));
+                                }
+                            // Word was for our team, don't change but check if that was our win condition
+                            } else {
+                                // That was the last card for that team; they win, end the game
+                                if (colourWon(myGame.cards, myGame.turn == TURN_RED_OPERATIVES ? CARD_RED : CARD_BLUE)) {
+                                    myGame.active_channel.send(MESSAGES["gameend_allwordsselected"](myGame.turn == TURN_RED_OPERATIVES ? TURN_RED_MASTER : TURN_BLUE_MASTER));
+                                    endGame = true;
+                                }
+                            }
+                        } else myGame.active_channel.send(ERROR_MESSAGES["guess_notonboard"](myGuess));
+                    } else myGame.active_channel.send(ERROR_MESSAGES["not_your_turn"]);
+                    // Game was removed, so put it BACK if someone didn't win
+                    if (endGame) {
+                        myGame.active = false;
+                        flushGames();
+                    }
+                }
+            } else msg.channel.send(ERROR_MESSAGES["guess_missing_params"]);
+        }
+
+        /**
+         * PASS COMMAND: Once done guessing, pass the turn to the next spymaster
+         */
+        if (commands[0] == "pass") {
+            // Get the game
+            var myGame = null;
+            for (const g of ACTIVE_GAMES) {
+                if (g.redOps.includes(msg.author) || g.blueOps.includes(msg.author)) myGame = g;
+            }
+            // Not in a game
+            if (myGame == null) msg.channel.send(ERROR_MESSAGES["not_inagame"]);
+            else {
+                var preTurn = myGame.turn;
+                myGame.turn = (myGame.turn == TURN_RED_OPERATIVES && myGame.redOps.includes(msg.author)) ? TURN_BLUE_MASTER : (myGame.turn == TURN_BLUE_OPERATIVES && myGame.blueOps.includes(msg.author)) ? TURN_RED_MASTER : myGame.turn;
+                if (preTurn != myGame.turn) {
+                    myGame.active_channel.send(MESSAGES["turn_master_public"](myGame.turn, myGame.turn == TURN_RED_MASTER ? myGame.redMaster : myGame.blueMaster));
+                    myGame.turn == TURN_RED_MASTER ? myGame.redMaster.send(MESSAGES["turn_master_private"](myGame.cards)) : myGame.blueMaster.send(MESSAGES["turn_master_private"](myGame.cards));
+                } else {
+                    myGame.active_channel.send(ERROR_MESSAGES["not_your_turn"]);
+                }
             }
         }
 
@@ -259,6 +349,15 @@ client.on('message', async msg => {
                 myMessage += "\`\`\`";
                 msg.channel.send(myMessage);
             }
+        }
+
+        /**
+         * DEBUG COMMAND: Method used only by me (and individuals whitelisted by me)
+         * to show inner workings of the code and solve debug issues
+         */
+        if (commands[0] == "debug" && MOD_USERS.includes(msg.author.id)) {
+            if (commands[1] == "activegames") console.log(JSON.stringify(ACTIVE_GAMES, null, 3));
+            if (commands[1] == "currentgame") console.log(JSON.stringify(ACTIVE_GAMES.filter((g) => g.active_channel == msg.channel), null, 3));
         }
     }
 });
@@ -309,14 +408,10 @@ function startGame(collected) {
     }
     if ((rm == null) || (bm == null) || (bos.length == 0) || (ros.length == 0)) throw ERROR_MESSAGES["not_enough_reactions"];
     // Prevent one person having the same role
-
-    /**     commented out for debug reasons
     if (bos.includes(rm) || ros.includes(rm) || bos.includes(bm) || ros.includes(bm) || rm == bm) throw ERROR_MESSAGES["multiple_roles"];
     for (ro of ros) if (bos.includes(ro)) throw ERROR_MESSAGES["multiple_roles"];
-    */
-
     // Decide who's turn it is
-    t = Math.random() * 2 > 1 ? TURN_RED_MASTER : TURN_BLUE_MASTER;
+    t = (Math.random() * 2) > 1 ? TURN_RED_MASTER : TURN_BLUE_MASTER;
     // Get the wordbank for the game 
     if (SELECTED_PACKS.length == 0) SELECTED_PACKS.push("standard");
     c = getCards(SELECTED_PACKS, t == TURN_RED_MASTER ? 9 : 8, t == TURN_BLUE_MASTER ? 9 : 8);
@@ -391,9 +486,10 @@ function getCards(cardPacks, r, b) {
  * @pre The `cards` param is of size exactly 25
  * @param {Card[]} cards The array of cards currently in play
  * @param {boolean} showAll Whether or not to flip all the cards
+ * @param {boolean} hideFlipped Whether or not to cross out cards that have already been guessed
  * @return {String} A string (encased in ``` symbols) to be sent as a Discord message
  */
-function printBoard(cards, showAll = false) {
+function printBoard(cards, showAll = false, hideFlipped = false) {
     // Set up constants to use for printing
     const BOARD_ROWS = 5;
     const BOARD_COLS = 5;
@@ -404,8 +500,10 @@ function printBoard(cards, showAll = false) {
     const RED_FILL_CHAR = "🟥";
     const WHITE_FILL_CHAR = "⬜";
     const BLACK_FILL_CHAR = "⬛";
+    const FLIPPED_CHAR = "✖️";
     const VERTICAL_DIVIDER = VERT_DIVIDE_CHAR.repeat(13).repeat(5) + VERT_DIVIDE_CHAR;
     const HORIZONTAL_DIVIDER_COLOUR = (colour) => HORI_DIVIDE_CHAR + " " + (colour == CARD_BLUE ? BLUE_FILL_CHAR : colour == CARD_RED ? RED_FILL_CHAR : colour == CARD_ASSASSIN ? BLACK_FILL_CHAR : WHITE_FILL_CHAR).repeat(4) + " ";
+    const HORIZONTAL_DIVIDER_FLIPPED = HORI_DIVIDE_CHAR + " " + FLIPPED_CHAR.repeat(4) + " ";
     const HORIZONTAL_DIVIDER_EMPTY = HORI_DIVIDE_CHAR + " ".repeat(12);
     const HORIZONTAL_DIVIDER_WORD = (word) => HORI_DIVIDE_CHAR + word;
     // Create first instance of string
@@ -420,8 +518,10 @@ function printBoard(cards, showAll = false) {
         }
         // Row of colours
         for (var card of row) {
-            if (card.flipped || showAll) {
+            if ((card.flipped || showAll) && !(hideFlipped && card.flipped)) {
                 result += HORIZONTAL_DIVIDER_COLOUR(card.colour);
+            } else if (hideFlipped && card.flipped) {
+                result += HORIZONTAL_DIVIDER_FLIPPED;
             } else {
                 result += HORIZONTAL_DIVIDER_EMPTY;
             }
@@ -441,6 +541,43 @@ function printBoard(cards, showAll = false) {
     // Cap off text and send it off
     result += VERTICAL_DIVIDER + "```";
     return result;
+}
+
+/**
+ * Flip over a specific card from within a given card array, and return that instance
+ * @param {Card[]} cards The array of cards to search through
+ * @param {String} word The word on the card to flip
+ * @returns {Card} Either the card that was just flipped, or null if the card does
+ *      not exist
+ */
+function flipCard(cards, word) {
+    var c = null;
+    for (const card of cards) {
+        if (card.word == word) {
+            c = card;
+            card.flipped = true;
+            break;
+        }
+    }
+    return c;
+}
+
+/**
+ * Search through an array of Cards and check whether all cards of a given colour
+ * have been flipped over (thus, that team wins)
+ * @param {Card[]} cards The array of cards to search through
+ * @param {String} colour One of [CARD_RED, CARD_BLUE]
+ * @return {Boolean} Whether or not team "colour" has won the game
+ */
+function colourWon(cards, colour) {
+    return cards.every((c) => c.colour == colour ? c.flipped : true);
+}
+
+/**
+ * Function called to remove all finished games stored in ACTIVE_GAMES
+ */
+function flushGames() {
+    ACTIVE_GAMES = ACTIVE_GAMES.filter((g) => g.active);
 }
 
 client.login(process.env.DISCORD_TOKEN);
